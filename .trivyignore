@@ -1,0 +1,6 @@
+# Accepted findings, each with a reason.
+
+# ALB access-log bucket cannot use SSE-KMS (the ELB log delivery service only writes with SSE-S3).
+AVD-AWS-0132
+# ECS task security group needs any-to-any within itself for gRPC between services; scoped by SG reference, not CIDR.
+AVD-AWS-0104

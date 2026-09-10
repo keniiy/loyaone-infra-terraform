@@ -1,392 +1,99 @@
-# Loyaone Infrastructure Terraform
+# LoyaOne infrastructure (Terraform, AWS)
 
-This repository contains Terraform configurations for managing the Loyaone infrastructure on AWS. It follows infrastructure-as-code best practices with a modular structure supporting multiple environments.
+Infrastructure as code for [LoyaOne](https://loyaone.com), the card-linked loyalty
+platform built at Reeddi. NestJS microservices on ECS Fargate behind one ALB, with
+PostgreSQL, Redis, NATS JetStream, SQS and DynamoDB, in three environments.
 
-## 📋 Table of Contents
+> **PICK ONE, then delete this note.**
+> (a) This repository defines the live LoyaOne environments.
+> (b) This repository is a reference implementation of the LoyaOne design. Production
+> was provisioned separately; this is the version I would build today.
 
-- [Prerequisites](#prerequisites)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-- [State Management](#state-management)
-- [Environments](#environments)
-- [Modules](#modules)
-- [Usage Examples](#usage-examples)
-- [Best Practices](#best-practices)
-- [Security](#security)
-- [Contributing](#contributing)
+[![terraform](https://github.com/keniiy/loyaone-infra-terraform/actions/workflows/terraform.yml/badge.svg)](https://github.com/keniiy/loyaone-infra-terraform/actions/workflows/terraform.yml)
 
-## Prerequisites
+## What you get
 
-Before you begin, ensure you have the following installed:
+- **16 modules** under `modules/`, each with typed and documented inputs, outputs and a README
+- **3 environments** (`dev`, `staging`, `prod`) that share one composition file; only `locals.tf` differs
+- **Remote state** in S3 with DynamoDB locking, bootstrapped by `global/s3-backend`
+- **Security by default**: private subnets, security groups by reference, KMS everywhere, TLS 1.3 at the edge, WAF in prod, Secrets Manager for credentials, no public IPs on compute
+- **Operability**: Container Insights, encrypted ECS Exec, slow-query and flow logs, eleven alarm types wired to SNS, dead-letter queues with redrive
+- **Delivery**: GitHub Actions runs `fmt`, `validate`, `tflint` (with the AWS ruleset) and `trivy` on every PR, then posts a plan per environment; deploys assume an OIDC role, no stored keys
+- **Docs**: [architecture and decisions](docs/architecture.md), [runbook](docs/runbook.md)
 
-- **Terraform** >= 1.0.0 ([Installation Guide](https://www.terraform.io/downloads))
-- **AWS CLI** configured with appropriate credentials ([Setup Guide](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html))
-- **Git** for version control
-- AWS account with appropriate IAM permissions
+## Layout
 
-### AWS Credentials Setup
+```
+.
+├── global/
+│   ├── s3-backend/     state bucket + lock table (local state, applied once)
+│   ├── kms/            one key per environment
+│   └── ecr/            one repository per service
+├── modules/
+│   ├── vpc             ├── ecs-cluster      ├── rds            ├── sqs
+│   ├── security-groups ├── ecs-service      ├── elasticache    ├── sns
+│   ├── alb             ├── nats             ├── dynamodb       ├── s3
+│   ├── waf             ├── iam              ├── ecr            └── cloudwatch
+├── environments/
+│   ├── dev/            main.tf (shared) + locals.tf (what makes it dev)
+│   ├── staging/
+│   └── prod/
+├── docs/               architecture.md, runbook.md
+└── .github/workflows/  terraform.yml
+```
 
-Configure your AWS credentials using one of these methods:
+## Getting started
+
+Prerequisites: Terraform >= 1.6, AWS CLI with credentials for the target account,
+[tflint](https://github.com/terraform-linters/tflint) and
+[trivy](https://github.com/aquasecurity/trivy) for `make lint`.
 
 ```bash
-# Option 1: AWS CLI configuration
-aws configure
+# 1. Once per account: state backend, KMS keys, ECR repositories
+make bootstrap
 
-# Option 2: Environment variables
-export AWS_ACCESS_KEY_ID="your-access-key"
-export AWS_SECRET_ACCESS_KEY="your-secret-key"
-export AWS_DEFAULT_REGION="eu-west-2"
-
-# Option 3: AWS SSO (recommended for teams)
-aws sso login --profile your-profile
+# 2. Per environment
+cp environments/dev/terraform.tfvars.example environments/dev/terraform.tfvars
+$EDITOR environments/dev/terraform.tfvars      # certificate ARN, OIDC provider ARN, services
+make plan ENV=dev
+make apply ENV=dev
 ```
 
-## Project Structure
+`terraform.tfvars` is git-ignored. The values it needs are an ACM certificate ARN for
+the ALB, the account's GitHub OIDC provider ARN, alarm email addresses, and the map of
+services to run (image tag, port, routing rule, size).
 
-```text
-loyaone-infra-terraform/
-├── README.md
-├── .gitignore
-├── environments/          # Environment-specific configurations
-│   ├── dev/              # Development environment
-│   │   ├── backend.tf
-│   │   ├── main.tf
-│   │   ├── providers.tf
-│   │   └── variables.tf
-│   ├── staging/          # Staging environment
-│   └── prod/             # Production environment
-├── global/               # Global/shared resources
-│   ├── kms/             # KMS key management
-│   └── s3-backend/      # S3 backend for Terraform state
-│       ├── backend.tf
-│       ├── main.tf
-│       ├── outputs.tf
-│       ├── providers.tf
-│       └── variables.tf
-└── modules/              # Reusable Terraform modules
-    ├── cloudwatch/      # CloudWatch monitoring
-    ├── dynamodb/        # DynamoDB tables
-    ├── ec2/             # EC2 instances
-    ├── eks/             # EKS clusters
-    ├── iam/             # IAM roles and policies
-    ├── rds/             # RDS databases
-    ├── sns/             # SNS topics
-    ├── sqs/             # SQS queues
-    └── vpc/             # VPC networking
-        ├── main.tf
-        ├── outputs.tf
-        └── variables.tf
+## How a request flows
+
+```
+client -> (WAF, prod) -> ALB :443 -> listener rule (host or path) -> target group
+       -> ECS task in a private subnet -> RDS / Redis / NATS / SQS / DynamoDB
+       -> outbound to payment providers via the NAT gateway's fixed IP
 ```
 
-## Getting Started
+Full diagram and the reasoning behind each choice: [docs/architecture.md](docs/architecture.md).
 
-### 1. Initialize the Global Backend (First Time Only)
-
-The S3 backend must be created before other environments can use it:
+## Working on it
 
 ```bash
-cd global/s3-backend
-terraform init
-terraform plan
-terraform apply
+make fmt        # terraform fmt -recursive
+make lint       # fmt check, tflint per stack, trivy config scan
+make validate ENV=staging
+pre-commit install   # runs fmt, validate, tflint, docs and trivy before every commit
 ```
 
-This creates:
+Pull requests get a plan comment per environment from CI. Applies to `dev` and `staging`
+run on merge to `main`; `prod` applies are manual and require the `prod` GitHub environment
+approval.
 
-- S3 bucket: `loyaone-terraform-state` (for storing Terraform state)
-- DynamoDB table: `loyaone-terraform-locks` (for state locking)
+## Conventions
 
-### 2. Set Up an Environment
+- Every resource is tagged `Project`, `Environment`, `ManagedBy` via provider `default_tags`
+- Names are `loyaone-<env>-<thing>`; log groups are `/loyaone/<env>/<thing>`
+- Modules never create providers or backends; environments do
+- A module's README is generated from its variables and outputs; edit the `.tf`, not the table
+- Anything that differs between environments goes in `locals.tf`, nowhere else
 
-Navigate to your desired environment:
+## Licence
 
-```bash
-cd environments/dev
-```
-
-Initialize Terraform:
-
-```bash
-terraform init
-```
-
-Review the planned changes:
-
-```bash
-terraform plan
-```
-
-Apply the configuration:
-
-```bash
-terraform apply
-```
-
-## State Management
-
-This project uses **remote state** stored in S3 with DynamoDB locking:
-
-- **State Location**: `s3://loyaone-terraform-state/envs/{environment}/terraform.tfstate`
-- **Lock Table**: `loyaone-terraform-locks`
-- **Region**: `eu-west-2`
-- **Encryption**: Enabled (AES256)
-
-### State Backend Configuration
-
-Each environment's `backend.tf` is pre-configured:
-
-```hcl
-terraform {
-  backend "s3" {
-    bucket         = "loyaone-terraform-state"
-    key            = "envs/dev/terraform.tfstate"
-    region         = "eu-west-2"
-    use_lockfile   = true
-    encrypt        = true
-    dynamodb_table = "loyaone-terraform-locks"
-  }
-}
-```
-
-## Environments
-
-### Development (`environments/dev/`)
-
-Development environment with relaxed security for testing.
-
-**Features:**
-
-- VPC with public and private subnets
-- NAT Gateway enabled for outbound internet access
-- Cost-optimized resources
-
-### Staging (`environments/staging/`)
-
-Staging environment mirroring production for pre-release testing.
-
-### Production (`environments/prod/`)
-
-Production environment with enhanced security and monitoring.
-
-## Modules
-
-### VPC Module
-
-Creates a VPC with public and private subnets, internet gateway, and NAT gateway.
-
-**Usage:**
-
-```hcl
-module "vpc" {
-  source = "../../modules/vpc"
-
-  name     = "loyaone-dev"
-  vpc_cidr = "10.0.0.0/16"
-
-  azs = [
-    "eu-west-2a",
-    "eu-west-2b",
-  ]
-
-  public_subnets_cidrs = [
-    "10.0.1.0/24",
-    "10.0.2.0/24",
-  ]
-
-  private_subnets_cidrs = [
-    "10.0.11.0/24",
-    "10.0.12.0/24",
-  ]
-
-  enable_nat_gateway = true
-
-  tags = {
-    Project     = "LoyaOne"
-    Environment = "dev"
-  }
-}
-```
-
-**Outputs:**
-
-- `vpc_id` - VPC ID
-- `public_subnet_ids` - List of public subnet IDs
-- `private_subnet_ids` - List of private subnet IDs
-- `public_route_table_id` - Public route table ID
-- `private_route_table_id` - Private route table ID
-
-### Other Modules
-
-- **CloudWatch**: Monitoring and logging
-- **DynamoDB**: NoSQL database tables
-- **EC2**: Compute instances
-- **EKS**: Kubernetes clusters
-- **IAM**: Roles and policies
-- **RDS**: Relational databases
-- **SNS**: Notification topics
-- **SQS**: Message queues
-
-## Usage Examples
-
-### Creating Infrastructure in Dev Environment
-
-```bash
-# Navigate to dev environment
-cd environments/dev
-
-# Initialize (if first time)
-terraform init
-
-# Plan changes
-terraform plan
-
-# Apply changes
-terraform apply
-
-# View outputs
-terraform output
-```
-
-### Destroying Infrastructure
-
-```bash
-# Review what will be destroyed
-terraform plan -destroy
-
-# Destroy infrastructure
-terraform destroy
-```
-
-### Working with Modules
-
-To use a module in an environment:
-
-1. Add the module block to `main.tf`
-2. Reference the module source: `source = "../../modules/{module-name}"`
-3. Provide required variables
-4. Run `terraform init` to download the module
-5. Run `terraform plan` and `terraform apply`
-
-## Best Practices
-
-1. **Always run `terraform plan` before `terraform apply`**
-   - Review changes carefully, especially in production
-
-2. **Use workspaces for multiple environments** (optional)
-
-   ```bash
-   terraform workspace new staging
-   terraform workspace select staging
-   ```
-
-3. **Keep state files secure**
-   - Never commit `.tfstate` files
-   - Use remote state (already configured)
-   - Enable encryption (already enabled)
-
-4. **Version control**
-   - Commit all `.tf` files
-   - Use meaningful commit messages
-   - Review changes via pull requests
-
-5. **Tag resources**
-   - All resources should have appropriate tags
-   - Include: Project, Environment, Owner, etc.
-
-6. **Modularize code**
-   - Use modules for reusable components
-   - Keep modules in `modules/` directory
-
-7. **Documentation**
-   - Document complex configurations
-   - Add descriptions to variables and outputs
-
-## Security
-
-### Credentials Management
-
-- **Never commit secrets** to version control
-- Use AWS IAM roles when possible (EC2, Lambda, etc.)
-- Use AWS Secrets Manager or Parameter Store for sensitive data
-- Rotate credentials regularly
-
-### State File Security
-
-- State files are stored in encrypted S3 bucket
-- Access is restricted via IAM policies
-- State locking prevents concurrent modifications
-
-### Network Security
-
-- Use private subnets for sensitive resources
-- Implement security groups with least privilege
-- Enable VPC Flow Logs for monitoring
-
-## Contributing
-
-1. **Create a feature branch**
-
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-2. **Make your changes**
-   - Follow existing code style
-   - Add comments for complex logic
-   - Update documentation as needed
-
-3. **Test your changes**
-
-   ```bash
-   terraform init
-   terraform validate
-   terraform plan
-   ```
-
-4. **Commit and push**
-
-   ```bash
-   git add .
-   git commit -m "Description of changes"
-   git push origin feature/your-feature-name
-   ```
-
-5. **Create a Pull Request**
-   - Provide clear description
-   - Reference related issues
-   - Request review from team members
-
-## Troubleshooting
-
-### Common Issues
-
-**Issue**: `Error: Failed to get existing workspaces`
-
-- **Solution**: Ensure S3 backend is initialized first (see [Getting Started](#getting-started))
-
-**Issue**: `Error: Error acquiring the state lock`
-
-- **Solution**: Another process is using the state. Wait or check for stale locks in DynamoDB
-
-**Issue**: `Error: Invalid AWS credentials`
-
-- **Solution**: Verify AWS credentials are configured correctly (see [Prerequisites](#prerequisites))
-
-### Getting Help
-
-- Check [Terraform documentation](https://www.terraform.io/docs)
-- Review [AWS provider documentation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
-- Contact the infrastructure team
-
-## License
-
-[Add your license here]
-
-## Contact
-
-**Project Owner**: Kehinde
-**Repository**: [https://github.com/keniiy/loyaone-infra-terraform](https://github.com/keniiy/loyaone-infra-terraform)
-
----
-
-**⚠️ Remember**: Always review `terraform plan` output before applying changes, especially in production environments!
+MIT. See [LICENSE](LICENSE).
