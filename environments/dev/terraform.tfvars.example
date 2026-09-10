@@ -1,0 +1,31 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+
+certificate_arn          = "arn:aws:acm:eu-west-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+alarm_emails             = ["oncall@example.com"]
+
+services = {
+  api = {
+    image_tag    = "1.0.0"
+    host_headers = ["api.dev.loyaone.example"]
+    priority     = 10
+    min_count    = 1
+    max_count    = 4
+  }
+  loyalty = {
+    image_tag     = "1.0.0"
+    path_patterns = ["/v1/loyalty/*"]
+    priority      = 20
+  }
+  merchant = {
+    image_tag     = "1.0.0"
+    path_patterns = ["/v1/merchants/*"]
+    priority      = 30
+  }
+  notification = {
+    image_tag = "1.0.0"
+    expose    = false
+    cpu       = 256
+    memory    = 512
+  }
+}
