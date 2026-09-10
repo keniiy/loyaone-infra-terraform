@@ -2,7 +2,7 @@
 
 resource "aws_vpc" "this" {
   cidr_block           = var.vpc_cidr // the overall IP range for the VPC (e.g. 10.0.0.0/16)
-  enable_dns_hostnames = true         // required for  normal DNS resolution
+  enable_dns_hostnames = true         // required for normal DNS resolution
   enable_dns_support   = true         // needed for EC2 hostnames,RDS instances, etc.
   tags = merge(var.tags, {
     Name = "${var.name}-vpc"
@@ -28,7 +28,6 @@ resource "aws_subnet" "public" {
     Name = "${var.name}-public-${count.index + 1}"
     Tier = "public"
   })
-
 }
 
 // Private subnets, no direct internet access
