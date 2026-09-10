@@ -1,9 +1,7 @@
+// This stack is intentionally on local state. It creates the remote backend
+// everything else uses, so it cannot depend on that backend existing.
 terraform {
-  backend "s3" {
-    bucket       = "loyaone-terraform-state"
-    key          = "global/s3-backend/terraform.tfstate"
-    region       = "eu-west-2"
-    use_lockfile = true
-    encrypt      = true
+  backend "local" {
+    path = "terraform.tfstate"
   }
 }
