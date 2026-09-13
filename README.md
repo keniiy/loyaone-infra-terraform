@@ -4,10 +4,10 @@ Infrastructure as code for [LoyaOne](https://loyaone.com), the card-linked loyal
 platform built at Reeddi. NestJS microservices on ECS Fargate behind one ALB, with
 PostgreSQL, Redis, NATS JetStream, SQS and DynamoDB, in three environments.
 
-> **PICK ONE, then delete this note.**
-> (a) This repository defines the live LoyaOne environments.
-> (b) This repository is a reference implementation of the LoyaOne design. Production
-> was provisioned separately; this is the version I would build today.
+> **Status: reference implementation.** LoyaOne's production environment was provisioned
+> separately at Reeddi. This repository is the platform as I would build it today, kept
+> honest by CI (`fmt`, `validate`, `tflint`, `trivy`) rather than by a live account. Nothing
+> here is applied; the plan step in CI runs only when AWS credentials are configured.
 
 [![terraform](https://github.com/keniiy/loyaone-infra-terraform/actions/workflows/terraform.yml/badge.svg)](https://github.com/keniiy/loyaone-infra-terraform/actions/workflows/terraform.yml)
 
