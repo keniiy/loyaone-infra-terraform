@@ -65,15 +65,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aquasecurity/trivy-action@v0.36.0
+      # Gate: fail the job on HIGH/CRITICAL only. With format=sarif the action reports every
+      # severity and the exit code fires on any of them, so gating and reporting are split.
+      - name: trivy (gate on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          trivyignores: .trivyignore
+
+      # Report: full SARIF for the Security tab, never fails the job.
+      - name: trivy (sarif report)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
           format: sarif
           output: trivy.sarif
-          severity: HIGH,CRITICAL
-          exit-code: "1"
+          exit-code: "0"
           trivyignores: .trivyignore
+          skip-setup-trivy: true
 
       - uses: github/codeql-action/upload-sarif@v3
         if: always()
