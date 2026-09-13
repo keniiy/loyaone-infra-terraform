@@ -53,6 +53,8 @@ jobs:
 
       - name: tflint
         working-directory: ${{ matrix.dir }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # authenticated plugin download, avoids the anonymous API rate limit
         run: |
           tflint --init --config="${GITHUB_WORKSPACE}/.tflint.hcl"
           tflint --config="${GITHUB_WORKSPACE}/.tflint.hcl" --format=compact
